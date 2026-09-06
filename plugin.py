@@ -23,7 +23,7 @@ from typing import Any, Literal
 from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-PLUGIN_VERSION = "0.6.4"
+PLUGIN_VERSION = "0.7.0"
 SUPPORTED_CONFIG_VERSION = PLUGIN_VERSION
 
 
@@ -128,10 +128,10 @@ class FilterSectionConfig(PluginConfigBase):
     )
     strict_interests: bool = Field(
         default=False,
-        description="开启后只保留命中兴趣词的内容（没命中的一律不返回）；关闭则命中置顶、其余保留",
+        description="全局白名单：开启后所有路径（热榜/漫步/订阅）只保留命中兴趣词的内容；关闭则命中置顶、其余保留",
         json_schema_extra={
-            "label": "严格兴趣模式",
-            "hint": "默认关闭——真人刷热搜是'都扫一眼'；想让她只聊关心的圈子再开",
+            "label": "全局白名单（只收兴趣命中）",
+            "hint": "默认关闭——真人刷热搜是'都扫一眼'；开启=她只'刷到'兴趣相关的内容（与雷区黑名单相对）",
         },
     )
 
@@ -236,12 +236,28 @@ class AmbientSectionConfig(PluginConfigBase):
             "hint": "填群号即可，不用查 stream_id；这是'她刷到过'的主要入口",
         },
     )
+    chat_blocklist: list[str] = Field(
+        default_factory=list,
+        description="按聊天设置黑名单：格式「群号或QQ号:关键词1,关键词2」。命中的内容不注入该聊天",
+        json_schema_extra={
+            "label": "聊天黑名单（可选）",
+            "hint": "例：210589508:政治,八卦。与全局雷区叠加生效（全局雷区先行）",
+        },
+    )
     group_topics: list[str] = Field(
         default_factory=list,
         description="按聊天定制内容：格式「群号或QQ号:关键词1,关键词2」。对应的群/私聊只会注入命中关键词的'刷到'内容",
         json_schema_extra={
             "label": "聊天内容定制（可选）",
             "hint": "例：210589508:卡拉彼丘,游戏 或 123456(某人的QQ号):二次元。命中才注入；不配置的聊天收全部内容",
+        },
+    )
+    apply_to_all: bool = Field(
+        default=False,
+        description="全局生效模式：开启后无需填写群号/私聊号，'刷到'自动应用到她所有的群聊和私聊",
+        json_schema_extra={
+            "label": "全局生效模式（啥都不用填）",
+            "hint": "开启后自动覆盖她所有的群聊和私聊；聊天内容定制/黑名单仍可按群号或QQ号单独配置。默认关闭",
         },
     )
     private_ids: list[str] = Field(
@@ -391,10 +407,10 @@ class HotTopicsPlugin(MaiBotPlugin):
 
             return _random.sample(candidates, min(n, len(candidates)))
 
-    def _parse_group_topics(self) -> dict[str, list[str]]:
-        """解析群聊内容定制配置：['群号:词1,词2', ...] -> {群号: [词1, 词2]}。"""
+    def _parse_group_topics(self, key_field: str = "group_topics") -> dict[str, list[str]]:
+        """解析聊天定制配置：['群号或QQ号:词1,词2', ...] -> {ID: [词1, 词2]}。"""
         result: dict[str, list[str]] = {}
-        for entry in self.config.ambient.group_topics:
+        for entry in getattr(self.config.ambient, key_field, []):
             entry = str(entry).strip()
             if not entry or ("=" not in entry and ":" not in entry and "：" not in entry):
                 continue
@@ -409,6 +425,28 @@ class HotTopicsPlugin(MaiBotPlugin):
         """把配置里的 QQ 群号/私聊 QQ 号解析成聊天流 ID，并返回 stream_id->群号 映射。"""
         targets: list[str] = []
         sid_to_gid: dict[str, str] = {}
+        # 全局生效模式：自动发现所有聊天流（无需手动填列表）
+        if getattr(self.config.ambient, "apply_to_all", False):
+            try:
+                streams = await self.ctx.chat.get_all_streams("qq")
+                for s in streams or []:
+                    if isinstance(s, dict):
+                        sid = s.get("stream_id") or s.get("session_id") or s.get("id")
+                        gid = str(s.get("group_id") or s.get("user_id") or "").strip()
+                    else:
+                        sid = getattr(s, "stream_id", None) or getattr(s, "session_id", None)
+                        gid = str(getattr(s, "group_id", "") or getattr(s, "user_id", "") or "").strip()
+                    if sid:
+                        sid = str(sid)
+                        targets.append(sid)
+                        if gid:
+                            sid_to_gid[sid] = gid
+                if targets:
+                    self.ctx.logger.info("全局生效模式：发现 %d 个聊天流", len(targets))
+                    return list(dict.fromkeys(targets)), sid_to_gid
+                self.ctx.logger.warning("全局生效模式未发现任何聊天流，回退手动列表")
+            except Exception as exc:  # noqa: BLE001
+                self.ctx.logger.warning("全局生效模式失败，回退手动列表：%s", exc)
         for gid in self.config.ambient.group_ids:
             gid = str(gid).strip()
             if not gid:
@@ -460,12 +498,16 @@ class HotTopicsPlugin(MaiBotPlugin):
             now_str = _time.strftime("%m月%d日 %H:%M")
             hint = str(cfg.style_hint or "").strip()
             topics_map = self._parse_group_topics()
+            block_map = self._parse_group_topics(key_field="chat_blocklist")
             all_titles = [p["title"] for p in picked]
             for sid in inject_targets:
-                # 群聊内容定制：配置了关键词的群只注入命中内容
+                # 聊天内容定制（白名单）：配置了关键词的聊天只注入命中内容
                 gid = sid_to_gid.get(sid)
                 kws = topics_map.get(gid, []) if gid else []
                 titles = hot_core.filter_by_keywords(all_titles, kws)
+                # 聊天黑名单：命中的内容不注入该聊天
+                blk = block_map.get(gid, []) if gid else []
+                titles = hot_core.remove_by_keywords(titles, blk)
                 if not titles:
                     self.ctx.logger.info(
                         "注入跳过（%s）：本群内容定制关键词无一命中", gid or sid
@@ -636,6 +678,12 @@ class HotTopicsPlugin(MaiBotPlugin):
                             self.ctx.logger.info(
                                 "随机漫步采样（%s）雷区拦截 %d 条", key, blocked_n
                             )
+                        if self.config.filter.strict_interests:
+                            items = hot_core.interest_strict_filter(
+                                items, self.config.filter.interests
+                            )
+                            if not items:
+                                continue
                         candidates = hot_core.random_sample(
                             items, cfg.sample_count * 3, skip_top=cfg.skip_top
                         )

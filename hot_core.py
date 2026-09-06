@@ -223,6 +223,20 @@ def extract_line_date(text: str, today=None):
     return None
 
 
+def interest_strict_filter(items: list[dict], interests: list[str]) -> list[dict]:
+    """全局白名单：只保留命中兴趣词的条目（严格模式用，interests 为空则原样返回）。"""
+    if not interests:
+        return items
+    return [i for i in items if _contains_any(_matchable_text(i), interests)]
+
+
+def remove_by_keywords(titles: list[str], keywords: list[str]) -> list[str]:
+    """按关键词剔除标题（聊天黑名单用）：keywords 为空则原样返回。"""
+    if not keywords:
+        return titles
+    return [t for t in titles if not _contains_any(t, keywords)]
+
+
 def filter_by_keywords(titles: list[str], keywords: list[str]) -> list[str]:
     """按关键词过滤标题列表（群聊内容定制用）：keywords 为空则原样返回。"""
     if not keywords:
