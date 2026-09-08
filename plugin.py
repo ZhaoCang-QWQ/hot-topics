@@ -23,7 +23,7 @@ from typing import Any, Literal
 from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-PLUGIN_VERSION = "0.7.2"
+PLUGIN_VERSION = "0.7.3"
 SUPPORTED_CONFIG_VERSION = PLUGIN_VERSION
 
 
@@ -284,6 +284,14 @@ class AmbientSectionConfig(PluginConfigBase):
             "hint": "刷到了也不一定说——按这个概率决定要不要尝试开话题。0=从不主动",
         },
     )
+    proactive_target_count: int = Field(
+        default=0, ge=0, le=50,
+        description="每次主动提起覆盖几个群：0=所有已填的群都尝试；N=随机挑 N 个",
+        json_schema_extra={
+            "label": "主动提起群数",
+            "hint": "0=全部群都尝试（更活跃）；填 1~2 则每次随机挑几个（更克制）",
+        },
+    )
     proactive_groups: list[str] = Field(
         default_factory=list,
         description="填 QQ 群号（可多个）——刷到内容后随机挑一个群写入意图唤醒 Planner，是否主动开口由她自己决定",
@@ -539,36 +547,36 @@ class HotTopicsPlugin(MaiBotPlugin):
                     "主动提起未触发（本次概率未命中 %d%%）", chance
                 )
             else:
-                sid = None
-                groups = [str(g).strip() for g in cfg.proactive_groups if str(g).strip()]
-                random.shuffle(groups)  # 多群时随机挑一个尝试，避免只固定第一个
-                for gid in groups:
+                candidates = [str(g).strip() for g in cfg.proactive_groups if str(g).strip()]
+                random.shuffle(candidates)
+                count = max(0, int(cfg.proactive_target_count))
+                selected = candidates if count == 0 else candidates[:count]
+                hint = str(cfg.style_hint or "").strip()
+                intent = (
+                    f"你刚才在{label}刷到了：{'、'.join(p['title'] for p in picked)}。"
+                    f"如果适合当下的气氛，可以自然地聊聊其中一两个；不合适就不说。"
+                )
+                if hint:
+                    intent += f"\n表达约束：{hint}"
+                for gid in selected:
+                    sid = None
                     try:
                         stream = await self.ctx.chat.get_stream_by_group_id(gid)
-                        resolved = None
                         if isinstance(stream, dict):
-                            resolved = stream.get("stream_id") or stream.get("id") or stream.get("stream")
+                            sid = stream.get("stream_id") or stream.get("id") or stream.get("stream")
                         else:
-                            resolved = getattr(stream, "stream_id", None) or getattr(stream, "id", None)
-                        if resolved:
-                            sid = str(resolved)
-                            break
+                            sid = getattr(stream, "stream_id", None) or getattr(stream, "id", None)
                     except Exception as exc:  # noqa: BLE001
                         self.ctx.logger.warning("主动提起解析群 %s 失败：%s", gid, exc)
-                if sid:
-                    hint = str(cfg.style_hint or "").strip()
-                    intent = (
-                        f"你刚才在{label}刷到了：{'、'.join(p['title'] for p in picked)}。"
-                        f"如果适合当下的气氛，可以自然地聊聊其中一两个；不合适就不说。"
-                    )
-                    if hint:
-                        intent += f"\n表达约束：{hint}"
+                    if not sid:
+                        continue
                     try:
                         await self.ctx.maisaka.proactive.trigger(
                             sid, intent, reason="热榜插件随机漫步刷到内容", priority="low"
                         )
+                        self.ctx.logger.info("主动提起已写入意图（群 %s）", gid)
                     except Exception as exc:  # noqa: BLE001
-                        self.ctx.logger.warning("主动触发失败（%s）：%s", sid, exc)
+                        self.ctx.logger.warning("主动触发失败（群 %s）：%s", gid, exc)
 
     async def _ambient_loop(self) -> None:
         """后台低频循环：定期'刷到'一些内容存入记忆缓冲。"""
