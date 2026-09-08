@@ -305,7 +305,7 @@ class AmbientSectionConfig(PluginConfigBase):
         description="填 QQ 群号（可多个）——刷到内容后随机挑一个群写入意图唤醒 Planner，是否主动开口由她自己决定",
         json_schema_extra={
             "label": "允许她主动提起（可选）",
-            "hint": "可填多个群，每次随机挑一个尝试；没人跟她说话时她也可能自己开话题，慎用",
+            "hint": "可填多个群号；每次覆盖几个群由上方「主动提起群数」决定（0=全部）。没人跟她说话时她也可能自己开话题，慎用",
         },
     )
 
