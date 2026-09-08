@@ -286,10 +286,10 @@ class AmbientSectionConfig(PluginConfigBase):
     )
     proactive_groups: list[str] = Field(
         default_factory=list,
-        description="填 QQ 群号——刷到内容后写入意图唤醒 Planner，是否主动开口由她自己决定（建议最多填 1 个群）",
+        description="填 QQ 群号（可多个）——刷到内容后随机挑一个群写入意图唤醒 Planner，是否主动开口由她自己决定",
         json_schema_extra={
             "label": "允许她主动提起（可选）",
-            "hint": "填群号即可；没人跟她说话时她也可能自己开话题，频率半天一次，慎用",
+            "hint": "可填多个群，每次随机挑一个尝试；没人跟她说话时她也可能自己开话题，慎用",
         },
     )
 
@@ -538,33 +538,37 @@ class HotTopicsPlugin(MaiBotPlugin):
                 self.ctx.logger.info(
                     "主动提起未触发（本次概率未命中 %d%%）", chance
                 )
-            sid = None
-            for gid in cfg.proactive_groups[:1]:
-                gid = str(gid).strip()
-                if not gid:
-                    continue
-                try:
-                    stream = await self.ctx.chat.get_stream_by_group_id(gid)
-                    if isinstance(stream, dict):
-                        sid = stream.get("stream_id") or stream.get("id") or stream.get("stream")
-                    else:
-                        sid = getattr(stream, "stream_id", None) or getattr(stream, "id", None)
-                except Exception as exc:  # noqa: BLE001
-                    self.ctx.logger.warning("主动提起解析群 %s 失败：%s", gid, exc)
-            if sid:
-                hint = str(cfg.style_hint or "").strip()
-                intent = (
-                    f"你刚才在{label}刷到了：{'、'.join(p['title'] for p in picked)}。"
-                    f"如果适合当下的气氛，可以自然地聊聊其中一两个；不合适就不说。"
-                )
-                if hint:
-                    intent += f"\n表达约束：{hint}"
-                try:
-                    await self.ctx.maisaka.proactive.trigger(
-                        sid, intent, reason="热榜插件随机漫步刷到内容", priority="low"
+            else:
+                sid = None
+                groups = [str(g).strip() for g in cfg.proactive_groups if str(g).strip()]
+                random.shuffle(groups)  # 多群时随机挑一个尝试，避免只固定第一个
+                for gid in groups:
+                    try:
+                        stream = await self.ctx.chat.get_stream_by_group_id(gid)
+                        resolved = None
+                        if isinstance(stream, dict):
+                            resolved = stream.get("stream_id") or stream.get("id") or stream.get("stream")
+                        else:
+                            resolved = getattr(stream, "stream_id", None) or getattr(stream, "id", None)
+                        if resolved:
+                            sid = str(resolved)
+                            break
+                    except Exception as exc:  # noqa: BLE001
+                        self.ctx.logger.warning("主动提起解析群 %s 失败：%s", gid, exc)
+                if sid:
+                    hint = str(cfg.style_hint or "").strip()
+                    intent = (
+                        f"你刚才在{label}刷到了：{'、'.join(p['title'] for p in picked)}。"
+                        f"如果适合当下的气氛，可以自然地聊聊其中一两个；不合适就不说。"
                     )
-                except Exception as exc:  # noqa: BLE001
-                    self.ctx.logger.warning("主动触发失败（%s）：%s", sid, exc)
+                    if hint:
+                        intent += f"\n表达约束：{hint}"
+                    try:
+                        await self.ctx.maisaka.proactive.trigger(
+                            sid, intent, reason="热榜插件随机漫步刷到内容", priority="low"
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        self.ctx.logger.warning("主动触发失败（%s）：%s", sid, exc)
 
     async def _ambient_loop(self) -> None:
         """后台低频循环：定期'刷到'一些内容存入记忆缓冲。"""
