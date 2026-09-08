@@ -23,7 +23,7 @@ from typing import Any, Literal
 from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-PLUGIN_VERSION = "0.7.0"
+PLUGIN_VERSION = "0.7.1"
 SUPPORTED_CONFIG_VERSION = PLUGIN_VERSION
 
 
@@ -787,6 +787,8 @@ class HotTopicsPlugin(MaiBotPlugin):
             "获取当前全网热榜（微博/知乎/抖音/B站/贴吧等）。"
             "当用户问'最近有什么热点/热搜/大家都在聊什么/有什么新闻'，"
             "或聊天需要时效性话题时调用；单纯闲聊不需要调用。"
+            "调用后你会拿到素材，请用你自己的话转述，"
+            "千万不要把工具名或'工具调用'之类的字样写进回复。"
         ),
         parameters=[
             ToolParameterInfo(
@@ -814,7 +816,11 @@ class HotTopicsPlugin(MaiBotPlugin):
                 ),
             }
         content = self._gather(key)
-        return {"name": "get_hot_topics", "content": content}
+        hint = (
+            "\n（以上是你'刷到'的素材，用你自己的话自然转述即可；"
+            "不要提到工具名，也不要输出'工具调用'、'【工具调用】'之类的字样。）"
+        )
+        return {"name": "get_hot_topics", "content": content + hint}
 
     # ---- Command：手动自检 ----
 
