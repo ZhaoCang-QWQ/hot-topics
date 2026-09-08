@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from typing import Any, Literal
 from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-PLUGIN_VERSION = "0.7.4"
+PLUGIN_VERSION = "0.7.5"
 SUPPORTED_CONFIG_VERSION = PLUGIN_VERSION
 
 
