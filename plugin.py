@@ -23,7 +23,7 @@ from typing import Any, Literal
 from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-PLUGIN_VERSION = "0.7.3"
+PLUGIN_VERSION = "0.7.4"
 SUPPORTED_CONFIG_VERSION = PLUGIN_VERSION
 
 
@@ -282,6 +282,14 @@ class AmbientSectionConfig(PluginConfigBase):
         json_schema_extra={
             "label": "主动提起概率（%）",
             "hint": "刷到了也不一定说——按这个概率决定要不要尝试开话题。0=从不主动",
+        },
+    )
+    proactive_priority: Literal["low", "normal", "high"] = Field(
+        default="low",
+        description="写入意图的优先级：low=轻声建议（Planner 常因气氛不合适沉默）；normal/high 更容易真的开口",
+        json_schema_extra={
+            "label": "主动提起优先级",
+            "hint": "想让她更容易主动聊，改 normal 或 high（太高的代价是可能显得突兀）",
         },
     )
     proactive_target_count: int = Field(
@@ -572,9 +580,14 @@ class HotTopicsPlugin(MaiBotPlugin):
                         continue
                     try:
                         await self.ctx.maisaka.proactive.trigger(
-                            sid, intent, reason="热榜插件随机漫步刷到内容", priority="low"
+                            sid,
+                            intent,
+                            reason="热榜插件随机漫步刷到内容",
+                            priority=str(cfg.proactive_priority or "low"),
                         )
-                        self.ctx.logger.info("主动提起已写入意图（群 %s）", gid)
+                        self.ctx.logger.info(
+                            "主动提起已写入意图（群 %s，优先级 %s）", gid, cfg.proactive_priority
+                        )
                     except Exception as exc:  # noqa: BLE001
                         self.ctx.logger.warning("主动触发失败（群 %s）：%s", gid, exc)
 
