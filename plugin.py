@@ -24,7 +24,7 @@ from typing import Any, Literal
 from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-PLUGIN_VERSION = "0.7.5"
+PLUGIN_VERSION = "0.7.6"
 SUPPORTED_CONFIG_VERSION = PLUGIN_VERSION
 
 
