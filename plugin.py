@@ -269,6 +269,14 @@ class AmbientSectionConfig(PluginConfigBase):
             "hint": "填对方 QQ 号即可；只支持聊过天的对象（没聊过的先私聊一句建立会话）",
         },
     )
+    excluded_chat_ids: list[str] = Field(
+        default_factory=list,
+        description="不投递热点素材的聊天：填写群号、私聊 QQ 号或聊天流 ID。全局模式和手动列表均生效，也不主动提起",
+        json_schema_extra={
+            "label": "排除聊天（可选）",
+            "hint": "适配器名单禁止的会话可填在这里，避免注入时被宿主拒绝。此列表需手动维护，不会自动同步适配器名单",
+        },
+    )
     style_hint: str = Field(
         default="",
         description="她提起'刷到'内容时的表达约束（选填）。例：谈论游戏或社区话题时保持客观友善，吐槽点到为止，不贬低官方或任何玩家群体",
@@ -507,6 +515,8 @@ class HotTopicsPlugin(MaiBotPlugin):
         cfg = self.config.ambient
         import re as _re
 
+        excluded = {value.strip() for value in cfg.excluded_chat_ids if value.strip()}
+
         # 静默注入上下文：她"自己知道刷到了"，聊到相关话题可自然想起
         inject_targets, sid_to_gid = await self._resolve_target_streams()
         if inject_targets:
@@ -518,6 +528,8 @@ class HotTopicsPlugin(MaiBotPlugin):
             block_map = self._parse_group_topics(key_field="chat_blocklist")
             all_titles = [p["title"] for p in picked]
             for sid in inject_targets:
+                if sid in excluded or sid_to_gid.get(sid) in excluded:
+                    continue
                 # 聊天内容定制（白名单）：配置了关键词的聊天只注入命中内容
                 gid = sid_to_gid.get(sid)
                 kws = topics_map.get(gid, []) if gid else []
@@ -568,6 +580,8 @@ class HotTopicsPlugin(MaiBotPlugin):
                 if hint:
                     intent += f"\n表达约束：{hint}"
                 for gid in selected:
+                    if gid in excluded:
+                        continue
                     sid = None
                     try:
                         stream = await self.ctx.chat.get_stream_by_group_id(gid)
@@ -578,6 +592,8 @@ class HotTopicsPlugin(MaiBotPlugin):
                     except Exception as exc:  # noqa: BLE001
                         self.ctx.logger.warning("主动提起解析群 %s 失败：%s", gid, exc)
                     if not sid:
+                        continue
+                    if str(sid) in excluded:
                         continue
                     try:
                         await self.ctx.maisaka.proactive.trigger(
